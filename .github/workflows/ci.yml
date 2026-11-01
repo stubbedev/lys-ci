@@ -1,0 +1,28 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@75c75c31ebece974e48ebc36b4ad125bd97bd97b # 31.11.3
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: The tool's behaviour
+        run: tests/vendor-hash.sh
+      - name: The flake serves the tool
+        run: |
+          nix run . 2>&1 | grep -qF "usage: vendor-hash"
+      - name: Lint the scripts and the workflows
+        run: nix shell nixpkgs#shellcheck nixpkgs#actionlint nixpkgs#zizmor -c sh -c 'shellcheck vendor-hash tests/vendor-hash.sh && actionlint && zizmor --offline .'
