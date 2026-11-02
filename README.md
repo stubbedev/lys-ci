@@ -63,3 +63,18 @@ rm -rf "$dir"
 The check runs only when a hash is stale, because the run that the key's own
 push starts belongs to no Dependabot actor, sees no Dependabot secret, and
 finds the hash current.
+
+## Nix and Go caches
+
+`.github/actions/nix-setup` installs Nix with the xilo substituter and restores
+the job's Nix store and Go's compile cache, keyed by runner, job and
+`flake.lock`. A job then starts from what the last run fetched and built rather
+than downloading its whole closure again. Go test results are never reused:
+the action sets `GOFLAGS=-count=1`, so only compilation is cached. Use it after
+checkout, pinned to a commit of this repository:
+
+```yaml
+- uses: stubbedev/lys-ci/.github/actions/nix-setup@<commit>
+  with:
+    github-token: ${{ secrets.GITHUB_TOKEN }}
+```

@@ -1,0 +1,40 @@
+name: Nix and Go caches
+description: >-
+  Installs Nix with the xilo substituter, and restores the job's Nix store and
+  Go's compile cache, so a job starts from what the last run on this flake.lock
+  fetched and built. Go test results are never reused: GOFLAGS carries -count=1.
+
+inputs:
+  github-token:
+    description: Token for the Nix fetches GitHub rate-limits.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - uses: cachix/install-nix-action@75c75c31ebece974e48ebc36b4ad125bd97bd97b # v31.11.3
+      with:
+        github_access_token: ${{ inputs.github-token }}
+        extra_nix_config: |
+          experimental-features = nix-command flakes
+          extra-substituters = https://nix.stubbe.dev/c/default/default
+          extra-trusted-public-keys = default:6uWvXutL9cXjV3lii+Ur5ff+ArQoG4kMBKNXWrIxhHg=
+
+    - uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
+      with:
+        primary-key: nix-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('flake.lock') }}
+        restore-prefixes-first-match: nix-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-
+        gc-max-store-size-linux: 6G
+
+    - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          ~/.cache/go-build
+          ~/go/pkg/mod
+        key: go-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('flake.lock', 'go.sum') }}
+        restore-keys: |
+          go-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-
+
+    - name: Keep Go test runs real
+      shell: bash
+      run: echo "GOFLAGS=${GOFLAGS:+$GOFLAGS }-count=1" >> "$GITHUB_ENV"
