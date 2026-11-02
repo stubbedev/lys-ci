@@ -78,3 +78,28 @@ checkout, pinned to a commit of this repository:
   with:
     github-token: ${{ secrets.GITHUB_TOKEN }}
 ```
+
+## The fused-multiply gate
+
+`bin/no-fused` compiles the module in the current directory for arm64 and fails
+on any FMA instruction, which the Go spec lets the compiler fuse from `x*y + z`
+and which would make arm64's floats differ from amd64's. It runs the `go` on
+`PATH`, the repository's own.
+
+A repository takes this repository as a flake input, pinned by its `flake.lock`
+like any other, and puts it in its dev shell, which puts `bin/no-fused` on `PATH`:
+
+```nix
+inputs.lys-ci.url = "github:stubbedev/lys-ci";
+# in the dev shell, as a string, since mkShell takes no flake for a package
+packages = ["${inputs.lys-ci}"];
+```
+
+```just
+no-fused:
+    no-fused
+```
+
+It is a dev shell tool rather than a `nix run`, unlike `vendor-hash`, because it
+is a gate: the repositories' `just docker` containers run the dev shell's store
+paths with no `nix` and no daemon socket to run it with.

@@ -1,18 +1,20 @@
 {
-  description = "lys-ci - the CI tool every lys repository shares";
+  description = "lys-ci - the CI tools every lys repository shares";
 
   outputs = {self}: let
     systems = ["x86_64-linux" "aarch64-linux" "aarch64-darwin"];
-    app = {
+    tool = name: {
       type = "app";
-      program = "${self}/vendor-hash";
+      program = "${self}/${name}";
     };
+    vendor-hash = tool "vendor-hash";
   in {
     apps = builtins.listToAttrs (map (system: {
         name = system;
         value = {
-          vendor-hash = app;
-          default = app;
+          inherit vendor-hash;
+          no-fused = tool "bin/no-fused";
+          default = vendor-hash;
         };
       })
       systems);

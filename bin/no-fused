@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if ! asm=$(GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -gcflags=-S -o /dev/null ./... 2>&1); then
+    printf '%s\n' "$asm" >&2
+    echo "no-fused: the arm64 build failed" >&2
+    exit 1
+fi
+if fused=$(grep -E '\b(FMADD|FMSUB|FNMADD|FNMSUB)[DS]\b' <<<"$asm"); then
+    printf '%s\n' "$fused" >&2
+    exit 1
+fi
