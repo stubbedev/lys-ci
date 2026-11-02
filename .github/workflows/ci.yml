@@ -21,10 +21,13 @@ jobs:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
       - name: The tool's behaviour
         run: tests/vendor-hash.sh
+      - name: The release tool's behaviour
+        run: tests/release.sh
       - name: The fused-multiply gate's behaviour
         run: nix shell nixpkgs#go -c tests/no-fused.sh
       - name: The flake serves the tool
         run: |
           nix run . 2>&1 | grep -qF "usage: vendor-hash"
+          nix run .#release 2>&1 | grep -qF "usage: release"
       - name: Lint the scripts and the workflows
         run: nix shell nixpkgs#shellcheck nixpkgs#actionlint nixpkgs#zizmor -c sh -c 'shellcheck vendor-hash bin/no-fused tests/vendor-hash.sh tests/no-fused.sh && actionlint && zizmor --offline .'

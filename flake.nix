@@ -14,6 +14,7 @@
         value = {
           inherit vendor-hash;
           no-fused = tool "bin/no-fused";
+          release = tool "bin/release";
           default = vendor-hash;
         };
       })

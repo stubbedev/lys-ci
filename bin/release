@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+die() {
+    echo "release: $1" >&2
+    exit 1
+}
+
+bump=${1:-}
+case "$bump" in
+    major | minor | patch) ;;
+    *) die "usage: release <major|minor|patch>" ;;
+esac
+
+git fetch --quiet --tags origin
+branch=$(git rev-parse --abbrev-ref HEAD)
+default=$(git rev-parse --abbrev-ref origin/HEAD)
+default=${default#origin/}
+[ "$branch" = "$default" ] || die "on '$branch', not the default branch '$default'"
+[ -z "$(git status --porcelain)" ] || die "the working tree is dirty"
+sha=$(git rev-parse HEAD)
+[ "$sha" = "$(git rev-parse "origin/$default")" ] || die "HEAD is not origin/$default"
+if here=$(git describe --tags --exact-match --match 'v[0-9]*.[0-9]*.[0-9]*' HEAD 2> /dev/null); then
+    die "${sha:0:7} is already released as $here"
+fi
+
+state=$(gh run list --workflow ci.yml --commit "$sha" --limit 1 --json status,conclusion -q '.[0] | "\(.status) \(.conclusion)"')
+[ "$state" = "completed success" ] || die "ci.yml on ${sha:0:7} is '${state:-not started}', not a success"
+
+current=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n 1)
+current=${current:-v0.0.0}
+IFS=. read -r major minor patch <<< "${current#v}"
+patch=${patch%%-*}
+case "$bump" in
+    major) next="v$((major + 1)).0.0" ;;
+    minor) next="v$major.$((minor + 1)).0" ;;
+    patch) next="v$major.$minor.$((patch + 1))" ;;
+esac
+
+git tag -a "$next" -m "$next"
+git push --quiet origin "$next"
+if [ ! -e .github/workflows/release.yml ]; then
+    gh release create "$next" --verify-tag --title "$next" --generate-notes > /dev/null
+fi
+echo "$next at ${sha:0:7}"

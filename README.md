@@ -103,3 +103,19 @@ no-fused:
 It is a dev shell tool rather than a `nix run`, unlike `vendor-hash`, because it
 is a gate: the repositories' `just docker` containers run the dev shell's store
 paths with no `nix` and no daemon socket to run it with.
+
+## Cutting a release
+
+`release <major|minor|patch>` tags the current commit as the next version and
+pushes the tag. It refuses anything but a clean default branch at
+`origin`'s head whose `ci.yml` run succeeded, and a commit already released. A
+repository with `.github/workflows/release.yml` publishes from the tag; for one
+without, the tool creates the GitHub release itself.
+
+```just
+release-patch:
+    nix run github:stubbedev/lys-ci#release -- patch
+```
+
+A repository whose version lives in its source needs a commit before the tag,
+so lys-shell keeps its own recipes.
