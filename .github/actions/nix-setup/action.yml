@@ -37,4 +37,4 @@ runs:
 
     - name: Keep Go test runs real
       shell: bash
-      run: echo "GOFLAGS=${GOFLAGS:+$GOFLAGS }-count=1" >> "$GITHUB_ENV"
+      run: echo "GOFLAGS=-count=1" >> "$GITHUB_ENV"
