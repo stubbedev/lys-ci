@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+die() {
+    echo "bump-lys: $1" >&2
+    exit 1
+}
+
+[ -f go.mod ] || die "no go.mod in $PWD"
+self=$(sed -n 's/^module //p' go.mod)
+mapfile -t modules < <(grep -oE 'github\.com/stubbedev/lys-[a-z]+' go.mod | sort -u | grep -vxF "$self" || true)
+if [ "${#modules[@]}" -gt 0 ]; then
+    GOPROXY=direct GOPRIVATE='github.com/stubbedev/*' go get "${modules[@]/%/@HEAD}"
+    GOPROXY=direct GOPRIVATE='github.com/stubbedev/*' go mod tidy
+fi
+if [ -f flake.nix ]; then
+    mapfile -t inputs < <(grep -oE '^\s*lys-[a-z]+(\.url)? *=' flake.nix | grep -oE 'lys-[a-z]+' | sort -u)
+    if [ "${#inputs[@]}" -gt 0 ]; then
+        nix flake update "${inputs[@]}"
+    fi
+fi
+if [ -n "$(git status --porcelain -- go.sum)" ] && just --summary | tr ' ' '\n' | grep -qx vendor-hash; then
+    just vendor-hash
+fi

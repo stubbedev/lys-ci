@@ -23,6 +23,8 @@ jobs:
         run: tests/vendor-hash.sh
       - name: The release tool's behaviour
         run: tests/release.sh
+      - name: The bump tool's behaviour
+        run: tests/bump-lys.sh
       - name: The fused-multiply gate's behaviour
         run: nix shell nixpkgs#go -c tests/no-fused.sh
       - name: The flake serves the tool

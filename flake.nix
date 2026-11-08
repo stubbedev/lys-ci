@@ -14,6 +14,7 @@
         value = {
           inherit vendor-hash;
           no-fused = tool "bin/no-fused";
+          bump-lys = tool "bin/bump-lys";
           release = tool "bin/release";
           default = vendor-hash;
         };

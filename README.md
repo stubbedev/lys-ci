@@ -162,6 +162,17 @@ no-fused:
 On `PATH`, it also runs in containers that have the dev shell's store paths but no
 `nix`. `nix run github:stubbedev/lys-ci#no-fused` works too.
 
+## Bumping the lys modules
+
+`bump-lys` moves every `stubbedev/lys-*` module in `go.mod` to the head of its
+default branch, then the `lys-*` inputs of `flake.nix`, then runs `just vendor-hash`
+when `go.sum` changed. It commits nothing and needs no CI to have run upstream.
+
+```just
+bump-lys:
+    nix run github:stubbedev/lys-ci#bump-lys
+```
+
 ## Cutting a release
 
 `release <major|minor|patch>` tags the current commit as the next
