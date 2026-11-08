@@ -1,29 +1,34 @@
 # lys-ci
 
-The CI every lys repository shares, so a change lands in one place. It holds
-only what is about the repositories' builds; the documentation sites share
-[lys-docs-theme](https://github.com/stubbedev/lys-docs-theme).
+The CI tools every lys repository shares. Documentation sites use
+[lys-docs-theme](https://github.com/stubbedev/lys-docs-theme) instead.
+
+Pin the reusable workflow and the action to a commit of this repository.
 
 ## vendorHash on Dependabot's Go pull requests
 
-Dependabot rewrites `go.mod` and `go.sum` but not `vendorHash`, so the
-fixed-output vendor derivation fails every Nix build of its pull request. The
-`vendor-hash` workflow recomputes the hash with the repository's
-`just vendor-hash` and pushes the commit to the pull request. A build failing
-for any other reason than the hash fails the job, and a pull request whose
-code does not build against the bump still fails its own CI.
+Dependabot updates `go.mod` and `go.sum` but not `vendorHash`, so every Nix build
+of its pull request fails. The `vendor-hash` workflow runs `just vendor-hash` and
+pushes the result to the pull request.
 
-A repository needs three things.
+It runs only on Dependabot pull requests from the same repository. A current hash
+needs no commit. The job fails when the build fails for another reason, when
+`just vendor-hash` changes other than exactly one file, or when the hash is stale
+and `VENDOR_HASH_DEPLOY_KEY` is missing.
 
-The recipe, naming the file that holds `vendorHash` and the vendor derivation:
+### Setup
+
+The recipe passes the file holding `vendorHash` and the flake attribute of the
+vendor derivation:
 
 ```just
 vendor-hash:
     nix run github:stubbedev/lys-ci#vendor-hash -- nix/package.nix .#default.goModules
 ```
 
-The workflow, in `.github/workflows/vendor-hash.yml`, pinned to a commit of
-this repository:
+The file must contain exactly one `vendorHash = "sha256-...";` line.
+
+`.github/workflows/vendor-hash.yml`:
 
 ```yaml
 name: vendor-hash
@@ -44,12 +49,13 @@ jobs:
       VENDOR_HASH_DEPLOY_KEY: ${{ secrets.VENDOR_HASH_DEPLOY_KEY }}
 ```
 
+| Secret | Required | Purpose |
+| --- | --- | --- |
+| `VENDOR_HASH_DEPLOY_KEY` | Only when a hash is stale | Private key of a write deploy key; the push uses it so the new head gets a CI run |
+
 ### A repository's deploy key
 
-The push needs a key of its own because a `GITHUB_TOKEN` push starts no CI run
-on the new head. Without one, a pull request with a stale hash fails this job
-naming the secret. Each repository holds its own, as a Dependabot secret so
-only Dependabot's runs can read it:
+Store the key as a Dependabot secret, so only Dependabot's runs can read it:
 
 ```sh
 repo=stubbedev/<repository>
@@ -60,18 +66,24 @@ gh secret set VENDOR_HASH_DEPLOY_KEY --app dependabot -R "$repo" < "$dir/key"
 rm -rf "$dir"
 ```
 
-The check runs only when a hash is stale, because the run that the key's own
-push starts belongs to no Dependabot actor, sees no Dependabot secret, and
-finds the hash current.
+The run that the key's push starts has no Dependabot actor and cannot read the
+secret; it finds the hash current and succeeds.
 
 ## Nix and Go caches
 
-`.github/actions/nix-setup` installs Nix with the xilo substituter and restores
-the job's Nix store and Go's compile cache, keyed by runner, job and
-`flake.lock`. A job then starts from what the last run fetched and built rather
-than downloading its whole closure again. Go test results are never reused:
-the action sets `GOFLAGS=-count=1`, so only compilation is cached. Use it after
-checkout, pinned to a commit of this repository:
+`.github/actions/nix-setup`:
+
+- installs Nix with flakes and the `nix.stubbe.dev` substituter;
+- restores the Nix store, keyed by OS, architecture, job and `flake.lock`;
+- restores Go's build and module caches, keyed by OS, architecture, job,
+  `flake.lock` and `go.sum`;
+- sets `GOFLAGS=-count=1`, so test results are never cached.
+
+| Input | Required | Purpose |
+| --- | --- | --- |
+| `github-token` | Yes | Token for Nix fetches from GitHub |
+
+Use it after checkout:
 
 ```yaml
 - uses: stubbedev/lys-ci/.github/actions/nix-setup@<commit>
@@ -81,17 +93,16 @@ checkout, pinned to a commit of this repository:
 
 ## The fused-multiply gate
 
-`bin/no-fused` compiles the module in the current directory for arm64 and fails
-on any FMA instruction, which the Go spec lets the compiler fuse from `x*y + z`
-and which would make arm64's floats differ from amd64's. It runs the `go` on
-`PATH`, the repository's own.
+`no-fused` builds the module in the current directory for linux/arm64 with the
+`go` on `PATH` and fails on any `FMADD`, `FMSUB`, `FNMADD` or `FNMSUB`
+instruction. Go may fuse `x*y + z` on arm64, which rounds differently from amd64.
 
-A repository takes this repository as a flake input, pinned by its `flake.lock`
-like any other, and puts it in its dev shell, which puts `bin/no-fused` on `PATH`:
+Add this repository as a flake input and put it in the dev shell, which puts
+`bin/no-fused` on `PATH`:
 
 ```nix
 inputs.lys-ci.url = "github:stubbedev/lys-ci";
-# in the dev shell, as a string, since mkShell takes no flake for a package
+# in mkShell
 packages = ["${inputs.lys-ci}"];
 ```
 
@@ -100,22 +111,24 @@ no-fused:
     no-fused
 ```
 
-It is a dev shell tool rather than a `nix run`, unlike `vendor-hash`, because it
-is a gate: the repositories' `just docker` containers run the dev shell's store
-paths with no `nix` and no daemon socket to run it with.
+On `PATH`, it also runs in containers that have the dev shell's store paths but no
+`nix`. `nix run github:stubbedev/lys-ci#no-fused` works too.
 
 ## Cutting a release
 
-`release <major|minor|patch>` tags the current commit as the next version and
-pushes the tag. It refuses anything but a clean default branch at
-`origin`'s head whose `ci.yml` run succeeded, and a commit already released. A
-repository with `.github/workflows/release.yml` publishes from the tag; for one
-without, the tool creates the GitHub release itself.
+`release <major|minor|patch>` tags the current commit as the next
+`vMAJOR.MINOR.PATCH` (from `v0.0.0` when there is no tag) and pushes the tag.
+
+It refuses unless the working tree is clean, on `origin`'s default branch, at
+`origin/<default>`, not yet tagged, and its latest `ci.yml` run succeeded.
+
+A repository with `.github/workflows/release.yml` publishes from the tag. For one
+without, `release` creates the GitHub release with generated notes.
 
 ```just
 release-patch:
     nix run github:stubbedev/lys-ci#release -- patch
 ```
 
-A repository whose version lives in its source needs a commit before the tag,
-so lys-shell keeps its own recipes.
+`release` makes no commit: a repository whose version is stored in its source must
+commit the new version first.
