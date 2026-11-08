@@ -19,6 +19,7 @@ if [ -f flake.nix ]; then
         nix flake update "${inputs[@]}"
     fi
 fi
-if [ -n "$(git status --porcelain -- go.sum)" ] && just --summary | tr ' ' '\n' | grep -qx vendor-hash; then
+recipes=" $(just --summary) "
+if [ -n "$(git status --porcelain -- go.sum)" ] && [[ "$recipes" == *" vendor-hash "* ]]; then
     just vendor-hash
 fi
