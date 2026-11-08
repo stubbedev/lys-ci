@@ -69,6 +69,49 @@ rm -rf "$dir"
 The run that the key's push starts has no Dependabot actor and cannot read the
 secret; it finds the hash current and succeeds.
 
+## Security scanning
+
+The `security` workflow runs CodeQL over Go and the workflows, Grype and
+govulncheck with SARIF uploaded to code scanning, and dependency review with the
+licence allow-list on pull requests.
+
+The caller owns the triggers and the concurrency group, and grants the jobs'
+permissions:
+
+```yaml
+jobs:
+  security:
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+      security-events: write
+    uses: stubbedev/lys-ci/.github/workflows/security.yml@<commit>
+```
+
+| Input | Default | Purpose |
+| --- | --- | --- |
+| `go-toolchain` | `stable` | `stable`: the latest Go. `go.mod`: the version `go.mod` names, with `CGO_ENABLED=0`. `nix`: the dev shell, and a reachable vulnerability fails the job |
+| `bounded-timeouts` | `false` | Bound each job to 10-30 minutes instead of GitHub's six hours |
+
+## Publishing a release
+
+The `publish-release` workflow downloads every artifact of the run, writes
+`SHA256SUMS` and creates the release for the pushed tag with generated notes. Run
+it after the jobs that upload the `.tar.gz`, `.deb` and `.rpm` files:
+
+```yaml
+publish:
+  needs: package
+  permissions:
+    contents: write
+  uses: stubbedev/lys-ci/.github/workflows/publish-release.yml@<commit>
+```
+
+| Input | Default | Purpose |
+| --- | --- | --- |
+| `timeout-minutes` | `360` | The job's timeout |
+
 ## Nix and Go caches
 
 `.github/actions/nix-setup`:
