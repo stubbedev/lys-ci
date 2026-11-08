@@ -118,9 +118,14 @@ publish:
 
 - installs Nix with flakes and the `nix.stubbe.dev` substituter;
 - restores the Nix store, keyed by OS, architecture, job and `flake.lock`;
-- restores Go's build and module caches, keyed by OS, architecture, job,
-  `flake.lock` and `go.sum`;
-- sets `GOFLAGS=-count=1`, so test results are never cached.
+- restores Go's build and module caches, refreshed daily and on a change to
+  `flake.lock` or `go.sum`, so `go test` reruns only what a commit can affect;
+- on a `schedule` event sets `GOFLAGS=-count=1` and leaves `LYS_TEST_ARGS` unset,
+  so the weekly run repeats everything with the repository's own default flags.
+
+A test recipe takes its uncacheable flags from `LYS_TEST_ARGS`, with its local
+default after the dash: `go test ${LYS_TEST_ARGS--shuffle=on} ./...`. Other runs
+set it empty, because `-shuffle` and `-count` turn Go's test cache off.
 
 | Input | Required | Purpose |
 | --- | --- | --- |

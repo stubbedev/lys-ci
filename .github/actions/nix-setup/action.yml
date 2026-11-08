@@ -2,7 +2,8 @@ name: Nix and Go caches
 description: >-
   Installs Nix with the xilo substituter, and restores the job's Nix store and
   Go's compile cache, so a job starts from what the last run on this flake.lock
-  fetched and built. Go test results are never reused: GOFLAGS carries -count=1.
+  fetched and built. Go reuses a test result only while nothing the test depends
+  on has changed; the weekly scheduled run reruns everything, shuffled.
 
 inputs:
   github-token:
@@ -26,15 +27,26 @@ runs:
         restore-prefixes-first-match: nix-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-
         gc-max-store-size-linux: 6G
 
+    - id: cache-day
+      shell: bash
+      run: echo "day=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
+
     - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: |
           ~/.cache/go-build
           ~/go/pkg/mod
-        key: go-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('flake.lock', 'go.sum') }}
+        key: go-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ steps.cache-day.outputs.day }}-${{ hashFiles('flake.lock', 'go.sum') }}
         restore-keys: |
           go-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-
 
-    - name: Keep Go test runs real
+    - name: Reuse unchanged test results, apart from the weekly full run
       shell: bash
-      run: echo "GOFLAGS=-count=1" >> "$GITHUB_ENV"
+      env:
+        EVENT: ${{ github.event_name }}
+      run: |
+        if [ "$EVENT" = schedule ]; then
+          echo "GOFLAGS=-count=1" >> "$GITHUB_ENV"
+        else
+          echo "LYS_TEST_ARGS=" >> "$GITHUB_ENV"
+        fi
