@@ -54,8 +54,7 @@ case "$*" in
         calls=$(grep -c "^$name run list --workflow" "$STATE/gh.log")
         sed -n "${calls}p" <<< "$states" | grep . || tail -n 1 <<< "$states"
         ;;
-    "run list --commit"*length*) echo 0 ;;
-    "run list --commit"*) echo "green|ci=success, release=success" ;;
+    "run list --commit"*) jq -r "${*: -1}" <<< '[{"workflowName":"ci","status":"completed","conclusion":"cancelled","createdAt":"2026-01-01T00:00:00Z"},{"workflowName":"ci","status":"completed","conclusion":"success","createdAt":"2026-01-01T00:01:00Z"},{"workflowName":"release","status":"completed","conclusion":"success","createdAt":"2026-01-01T00:00:30Z"}]' ;;
 esac
 STUB
 chmod +x "$work/tool/"* "$work/bin/"*

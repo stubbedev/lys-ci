@@ -247,17 +247,19 @@ for i in "${!pids[@]}"; do
 done
 
 settle_one() {
-    local sha waited=0 pending
+    local sha waited=0 pending latest='group_by(.workflowName) | map(max_by(.createdAt))'
     sha=$(git -C "${dir_of[$1]}" rev-parse HEAD)
     while [ "$waited" -lt "$ci_limit" ]; do
-        pending=$(cd "${dir_of[$1]}" && gh run list --commit "$sha" --json status -q '[.[] | select(.status != "completed")] | length' || echo 1)
-        [ "$pending" != 0 ] || break
+        pending=$(cd "${dir_of[$1]}" && gh run list --commit "$sha" --json workflowName,status,createdAt \
+            -q "$latest | if length == 0 then -1 else map(select(.status != \"completed\")) | length end" || echo 1)
+        if [ "$pending" = 0 ] || { [ "$pending" = -1 ] && [ "$waited" -ge "$ci_stall" ]; }; then break; fi
         sleep "$ci_poll"
         waited=$((waited + ci_poll))
     done
-    (cd "${dir_of[$1]}" && gh run list --commit "$sha" --json workflowName,status,conclusion \
-        -q '(if all(.[]; .status == "completed" and (.conclusion | IN("success", "skipped", "neutral"))) then "green" else "red" end)
-            + "|" + (map("\(.workflowName)=\(if .status == "completed" then .conclusion else .status end)") | sort | join(", "))')
+    (cd "${dir_of[$1]}" && gh run list --commit "$sha" --json workflowName,status,conclusion,createdAt \
+        -q "$latest"' | if length == 0 then "red|no workflow ran" else
+            (if all(.[]; .status == "completed" and (.conclusion | IN("success", "skipped", "neutral"))) then "green" else "red" end)
+            + "|" + (map("\(.workflowName)=\(if .status == "completed" then .conclusion else .status end)") | sort | join(", ")) end')
 }
 
 pids=()
