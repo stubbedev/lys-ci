@@ -206,9 +206,11 @@ cd ~/git/private/lys-ci && nix run .#train
    runs `bump-lys` tier by tier, repositories of one tier in parallel. A changed
    checkout is built and vetted, committed as `deps: …` and pushed. No tier waits
    for CI: `bump-lys` resolves to the heads the tier before just pushed.
-3. It waits for `ci.yml` on every head at once. A failed run has its failed jobs
-   run once more; a second failure keeps that repository and everything that
-   depends on it from being released.
+3. It waits for `ci.yml` on every head at once. A run that has not started after
+   `TRAIN_CI_STALL` seconds (900) is dispatched afresh once, so `ci.yml` needs a
+   `workflow_dispatch` trigger. A failed run has its failed jobs run once more; a
+   second failure keeps that repository and everything that depends on it from
+   being released.
 4. It runs `just release-patch` in every green repository whose head is not
    already released, in parallel, then waits for every workflow on the released
    heads, tag runs included, and reports them.

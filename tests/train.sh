@@ -46,6 +46,10 @@ name=$(basename "$PWD")
 printf '%s %s\n' "$name" "$*" >> "$STATE/gh.log"
 case "$*" in
     "run list --workflow ci.yml"*)
+        if [ -f "$STATE/stuck-$name" ] && ! grep -q "^$name workflow run ci.yml --ref main" "$STATE/gh.log"; then
+            echo "queued  12"
+            exit 0
+        fi
         states=$(cat "$STATE/ci-$name" 2> /dev/null || echo "completed success 1")
         calls=$(grep -c "^$name run list --workflow" "$STATE/gh.log")
         sed -n "${calls}p" <<< "$states" | grep . || tail -n 1 <<< "$states"
@@ -55,7 +59,7 @@ case "$*" in
 esac
 STUB
 chmod +x "$work/tool/"* "$work/bin/"*
-export PATH="$work/bin:$PATH" STATE="$work/state" WORK="$work" TRAIN_CI_POLL=0 TRAIN_CI_LIMIT=5
+export PATH="$work/bin:$PATH" STATE="$work/state" WORK="$work" TRAIN_CI_POLL=1 TRAIN_CI_LIMIT=5 TRAIN_CI_STALL=2
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
 
 repo() {
@@ -117,3 +121,13 @@ printf 'completed failure 11\n' > "$STATE/ci-lys-a"
 if out=$("$tool" "$work/lys-a" 2>&1); then fail "a moved head went out: $out"; fi
 [[ $out == *"origin has moved on since"* ]] || fail "the moved head was not named: $out"
 if grep -qF "run rerun" "$STATE/gh.log"; then fail "a stale run was rerun, which cancels the new head's run"; fi
+
+rm -f "$STATE/moves-lys-a" "$STATE/ci-lys-a"
+git -C "$work/lys-a" pull --quiet
+git -C "$work/lys-a" commit --quiet --allow-empty -m four
+git -C "$work/lys-a" push --quiet origin HEAD:main
+: > "$STATE/gh.log"
+touch "$STATE/stuck-lys-a"
+"$tool" "$work/lys-a" > "$work/out" 2>&1 || fail "a run that never started was not dispatched again: $(cat "$work/out")"
+[ "$(grep -c "workflow run ci.yml" "$STATE/gh.log")" = 1 ] || fail "dispatched $(grep -c "workflow run ci.yml" "$STATE/gh.log") times"
+grep -qF "lys-a: unchanged, head" "$work/out" || fail "an unchanged repository was not called so: $(cat "$work/out")"

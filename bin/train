@@ -17,6 +17,7 @@ esac
 bump_lys=$(cd "$(dirname "$0")" && pwd)/bump-lys
 ci_poll=${TRAIN_CI_POLL:-30}
 ci_limit=${TRAIN_CI_LIMIT:-3600}
+ci_stall=${TRAIN_CI_STALL:-900}
 release_tag='v[0-9]*.[0-9]*.[0-9]*'
 
 declare -a dirs=()
@@ -100,13 +101,17 @@ bump_one() {
     local deps
     cd "${dir_of[$1]}"
     "$bump_lys"
-    [ -n "$(git status --porcelain)" ] || return 0
+    if [ -z "$(git status --porcelain)" ]; then
+        echo "unchanged"
+        return 0
+    fi
     GOWORK=off go build ./...
     GOWORK=off go vet ./...
     deps=$(git diff go.mod | grep -E '^\+' | grep -oE 'github\.com/stubbedev/lys-[a-z]+ v[^ ]+' | sed 's#github.com/stubbedev/##' | paste -sd, | sed 's/,/, /g' || true)
     git add -A
     git commit --quiet -m "deps: ${deps:-the lys flake inputs at their heads}"
     git push --quiet origin HEAD
+    echo "bumped"
 }
 
 say "tiers: $(printf '[%s] ' "${tiers[@]/% /}")"
@@ -127,7 +132,7 @@ for tier in "${tiers[@]}"; do
     for i in "${!pids[@]}"; do
         name=${started[$i]}
         if wait "${pids[$i]}"; then
-            say "$name: bumped, head $(git -C "${dir_of[$name]}" rev-parse --short HEAD)"
+            say "$name: $(tail -n 1 "$logs/$name.bump"), head $(git -C "${dir_of[$name]}" rev-parse --short HEAD)"
         else
             failed[$name]="the bump failed: $(tail -n 3 "$logs/$name.bump" | tr '\n' ' ')"
             say "$name: ${failed[$name]}"
@@ -136,7 +141,7 @@ for tier in "${tiers[@]}"; do
 done
 
 ci_one() {
-    local sha state id waited=0 reran=""
+    local sha state id waited=0 stalled=0 reran="" dispatched=""
     cd "${dir_of[$1]}"
     sha=$(git rev-parse HEAD)
     if git describe --tags --exact-match --match "$release_tag" HEAD > /dev/null 2>&1; then
@@ -146,6 +151,18 @@ ci_one() {
         state=$(gh run list --workflow ci.yml --commit "$sha" --limit 1 --json status,conclusion,databaseId \
             -q '.[0] | "\(.status) \(.conclusion) \(.databaseId)"' || true)
         case "$state" in
+            "" | "queued "* | "waiting "* | "pending "* | "requested "*)
+                stalled=$((stalled + ci_poll))
+                if [ -z "$dispatched" ] && [ "$stalled" -ge "$ci_stall" ]; then
+                    if [ "$(git ls-remote origin HEAD | cut -f1)" != "$sha" ]; then
+                        echo "ci.yml on ${sha:0:7} never started, and origin has moved on since: run the train again"
+                        return 1
+                    fi
+                    dispatched=1
+                    echo "ci.yml on ${sha:0:7} has not started in ${stalled}s; dispatching a fresh run"
+                    gh workflow run ci.yml --ref "$(git rev-parse --abbrev-ref HEAD)"
+                fi
+                ;;
             "completed success "*) return 0 ;;
             "completed "*)
                 id=${state##* }
