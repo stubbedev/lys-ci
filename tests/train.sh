@@ -21,6 +21,11 @@ if [ -f "$STATE/bumps-$name" ]; then
     echo "github.com/stubbedev/$(cat "$STATE/bumps-$name") v0.0.0-$(date +%s)" >> go.mod
 fi
 echo "$name" >> "$STATE/bump-order"
+if [ -f "$STATE/moves-$name" ]; then
+    git clone --quiet "$WORK/$name.git" "$STATE/elsewhere"
+    git -C "$STATE/elsewhere" commit --quiet --allow-empty -m elsewhere
+    git -C "$STATE/elsewhere" push --quiet origin HEAD:main
+fi
 STUB
 cat > "$work/bin/go" << 'STUB'
 #!/usr/bin/env bash
@@ -103,3 +108,12 @@ grep -qF "lys-a: v0.0.2 at" "$work/out" || fail "lys-a's new commit was not rele
 grep -qF "lys-b: v0.0.2 at" "$work/out" || fail "lys-b's bump was not released: $(cat "$work/out")"
 grep -qF "lys-c: v0.0.1 at" "$work/out" || fail "lys-c was not released: $(cat "$work/out")"
 grep -qF "ci=success, release=success" "$work/out" || fail "the workflows were not reported: $(cat "$work/out")"
+
+git -C "$work/lys-a" commit --quiet --allow-empty -m three
+git -C "$work/lys-a" push --quiet origin HEAD:main
+: > "$STATE/gh.log"
+touch "$STATE/moves-lys-a"
+printf 'completed failure 11\n' > "$STATE/ci-lys-a"
+if out=$("$tool" "$work/lys-a" 2>&1); then fail "a moved head went out: $out"; fi
+[[ $out == *"origin has moved on since"* ]] || fail "the moved head was not named: $out"
+if grep -qF "run rerun" "$STATE/gh.log"; then fail "a stale run was rerun, which cancels the new head's run"; fi

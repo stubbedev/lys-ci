@@ -153,6 +153,10 @@ ci_one() {
                     echo "ci.yml on ${sha:0:7} failed twice, run $id"
                     return 1
                 fi
+                if [ "$(git ls-remote origin HEAD | cut -f1)" != "$sha" ]; then
+                    echo "ci.yml on ${sha:0:7} failed in run $id, and origin has moved on since: run the train again"
+                    return 1
+                fi
                 reran=1
                 echo "ci.yml on ${sha:0:7} failed in run $id; the failed jobs run once more. Failures:"
                 gh run view "$id" --log-failed | grep -E -- '--- FAIL|_test\.go:[0-9]+:|Exception|error:' | cut -c1-300 | head -n 12 || true
