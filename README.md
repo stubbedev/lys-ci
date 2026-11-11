@@ -191,3 +191,28 @@ release-patch:
 
 `release` makes no commit: a repository whose version is stored in its source must
 commit the new version first.
+
+## Releasing every lys repository at once
+
+`train` releases a set of lys checkouts together, by default every `lys-*` checkout
+with a `go.mod` beside the current directory:
+
+```sh
+cd ~/git/private/lys-ci && nix run .#train
+```
+
+1. Every checkout must be clean, on its default branch and at its `origin` head.
+2. It orders them by their `stubbedev/lys-*` requires and `lys-*` flake inputs and
+   runs `bump-lys` tier by tier, repositories of one tier in parallel. A changed
+   checkout is built and vetted, committed as `deps: …` and pushed. No tier waits
+   for CI: `bump-lys` resolves to the heads the tier before just pushed.
+3. It waits for `ci.yml` on every head at once. A failed run has its failed jobs
+   run once more; a second failure keeps that repository and everything that
+   depends on it from being released.
+4. It runs `just release-patch` in every green repository whose head is not
+   already released, in parallel, then waits for every workflow on the released
+   heads, tag runs included, and reports them.
+
+It exits non-zero when anything was not released or a workflow is not green.
+`TRAIN_CI_POLL` and `TRAIN_CI_LIMIT` set the polling interval and the wait limit in
+seconds (30 and 3600).

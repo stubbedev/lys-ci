@@ -1,0 +1,267 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+die() {
+    echo "train: $1" >&2
+    exit 1
+}
+say() { printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*"; }
+
+case "${1:-}" in
+    -h | --help)
+        echo "usage: train [checkout ...]   (default: every lys-* checkout with a go.mod beside the current directory)"
+        exit 0
+        ;;
+esac
+
+bump_lys=$(cd "$(dirname "$0")" && pwd)/bump-lys
+ci_poll=${TRAIN_CI_POLL:-30}
+ci_limit=${TRAIN_CI_LIMIT:-3600}
+release_tag='v[0-9]*.[0-9]*.[0-9]*'
+
+declare -a dirs=()
+if [ "$#" -gt 0 ]; then
+    for d in "$@"; do dirs+=("$(cd "$d" && pwd)"); done
+else
+    for d in "$PWD"/../lys-*/; do
+        if [ -f "$d/go.mod" ]; then dirs+=("$(cd "$d" && pwd)"); fi
+    done
+fi
+[ "${#dirs[@]}" -gt 0 ] || die "no lys checkouts given or found beside $PWD"
+
+declare -A dir_of=() needs=()
+for d in "${dirs[@]}"; do
+    [ -f "$d/go.mod" ] || die "$d has no go.mod"
+    dir_of[${d##*/}]=$d
+done
+mapfile -t names < <(printf '%s\n' "${!dir_of[@]}" | sort)
+
+for name in "${names[@]}"; do
+    d=${dir_of[$name]}
+    mapfile -t deps < <(
+        {
+            grep -oE 'github\.com/stubbedev/lys-[a-z]+' "$d/go.mod" | sed 's#github.com/stubbedev/##' || true
+            if [ -f "$d/flake.lock" ]; then
+                jq -r '.nodes.root.inputs | keys[]' "$d/flake.lock"
+            fi
+        } | sort -u
+    )
+    needs[$name]=""
+    for dep in "${deps[@]}"; do
+        if [ "$dep" != "$name" ] && [ -n "${dir_of[$dep]:-}" ]; then
+            needs[$name]+="$dep "
+        fi
+    done
+done
+
+declare -a tiers=()
+declare -A placed=()
+while [ "${#placed[@]}" -lt "${#names[@]}" ]; do
+    tier=""
+    for name in "${names[@]}"; do
+        [ -z "${placed[$name]:-}" ] || continue
+        ready=1
+        for dep in ${needs[$name]}; do
+            [ -n "${placed[$dep]:-}" ] || ready=0
+        done
+        if [ "$ready" = 1 ]; then tier+="$name "; fi
+    done
+    [ -n "$tier" ] || die "these repositories depend on each other in a cycle: $(for n in "${names[@]}"; do [ -n "${placed[$n]:-}" ] || printf '%s ' "$n"; done)"
+    for name in $tier; do placed[$name]=1; done
+    tiers+=("$tier")
+done
+
+for name in "${names[@]}"; do
+    d=${dir_of[$name]}
+    git -C "$d" fetch --quiet --tags origin || die "$name: fetching origin failed"
+    default=$(git -C "$d" rev-parse --abbrev-ref origin/HEAD)
+    branch=$(git -C "$d" rev-parse --abbrev-ref HEAD)
+    [ "$branch" = "${default#origin/}" ] || die "$name is on '$branch', not its default branch ${default#origin/}"
+    [ -z "$(git -C "$d" status --porcelain)" ] || die "$name has uncommitted changes"
+    git -C "$d" merge --quiet --ff-only "$default" > /dev/null 2>&1 || die "$name has diverged from $default"
+    [ "$(git -C "$d" rev-parse HEAD)" = "$(git -C "$d" rev-parse "$default")" ] || die "$name has commits that are not pushed"
+done
+
+logs=$(mktemp -d)
+trap 'rm -rf "$logs"' EXIT
+declare -A failed=()
+
+blocked_by() {
+    local dep
+    for dep in ${needs[$1]}; do
+        if [ -n "${failed[$dep]:-}" ]; then
+            echo "$dep"
+            return
+        fi
+    done
+}
+
+bump_one() {
+    local deps
+    cd "${dir_of[$1]}"
+    "$bump_lys"
+    [ -n "$(git status --porcelain)" ] || return 0
+    GOWORK=off go build ./...
+    GOWORK=off go vet ./...
+    deps=$(git diff go.mod | grep -E '^\+' | grep -oE 'github\.com/stubbedev/lys-[a-z]+ v[^ ]+' | sed 's#github.com/stubbedev/##' | paste -sd, | sed 's/,/, /g' || true)
+    git add -A
+    git commit --quiet -m "deps: ${deps:-the lys flake inputs at their heads}"
+    git push --quiet origin HEAD
+}
+
+say "tiers: $(printf '[%s] ' "${tiers[@]/% /}")"
+for tier in "${tiers[@]}"; do
+    pids=()
+    started=()
+    for name in $tier; do
+        dep=$(blocked_by "$name")
+        if [ -n "$dep" ]; then
+            failed[$name]="its dependency $dep did not make it"
+            say "$name: skipped, ${failed[$name]}"
+            continue
+        fi
+        (bump_one "$name") > "$logs/$name.bump" 2>&1 &
+        pids+=("$!")
+        started+=("$name")
+    done
+    for i in "${!pids[@]}"; do
+        name=${started[$i]}
+        if wait "${pids[$i]}"; then
+            say "$name: bumped, head $(git -C "${dir_of[$name]}" rev-parse --short HEAD)"
+        else
+            failed[$name]="the bump failed: $(tail -n 3 "$logs/$name.bump" | tr '\n' ' ')"
+            say "$name: ${failed[$name]}"
+        fi
+    done
+done
+
+ci_one() {
+    local sha state id waited=0 reran=""
+    cd "${dir_of[$1]}"
+    sha=$(git rev-parse HEAD)
+    if git describe --tags --exact-match --match "$release_tag" HEAD > /dev/null 2>&1; then
+        return 0
+    fi
+    while [ "$waited" -lt "$ci_limit" ]; do
+        state=$(gh run list --workflow ci.yml --commit "$sha" --limit 1 --json status,conclusion,databaseId \
+            -q '.[0] | "\(.status) \(.conclusion) \(.databaseId)"' || true)
+        case "$state" in
+            "completed success "*) return 0 ;;
+            "completed "*)
+                id=${state##* }
+                if [ -n "$reran" ]; then
+                    echo "ci.yml on ${sha:0:7} failed twice, run $id"
+                    return 1
+                fi
+                reran=1
+                echo "ci.yml on ${sha:0:7} failed in run $id; the failed jobs run once more. Failures:"
+                gh run view "$id" --log-failed | grep -E -- '--- FAIL|_test\.go:[0-9]+:|Exception|error:' | cut -c1-300 | head -n 12 || true
+                gh run rerun "$id" --failed > /dev/null
+                ;;
+        esac
+        sleep "$ci_poll"
+        waited=$((waited + ci_poll))
+    done
+    echo "ci.yml on ${sha:0:7} did not finish within ${ci_limit}s"
+    return 1
+}
+
+pids=()
+started=()
+for name in "${names[@]}"; do
+    [ -z "${failed[$name]:-}" ] || continue
+    (ci_one "$name") > "$logs/$name.ci" 2>&1 &
+    pids+=("$!")
+    started+=("$name")
+done
+for i in "${!pids[@]}"; do
+    name=${started[$i]}
+    if wait "${pids[$i]}"; then
+        say "$name: ci.yml green"
+    else
+        failed[$name]=$(tail -n 1 "$logs/$name.ci")
+        say "$name: ${failed[$name]}"
+        cat "$logs/$name.ci" >&2
+    fi
+done
+
+for tier in "${tiers[@]}"; do
+    for name in $tier; do
+        [ -z "${failed[$name]:-}" ] || continue
+        dep=$(blocked_by "$name")
+        if [ -n "$dep" ]; then failed[$name]="its dependency $dep did not make it"; fi
+    done
+done
+
+release_one() {
+    local d=${dir_of[$1]}
+    if git -C "$d" describe --tags --exact-match --match "$release_tag" HEAD 2> /dev/null; then
+        return 0
+    fi
+    (cd "$d" && just release-patch) > "$logs/$1.release" 2>&1 || {
+        tail -n 2 "$logs/$1.release" | tr '\n' ' '
+        return 1
+    }
+    git -C "$d" fetch --quiet --tags origin
+    git -C "$d" merge --quiet --ff-only "$(git -C "$d" rev-parse --abbrev-ref origin/HEAD)" > /dev/null
+    git -C "$d" describe --tags --abbrev=0 --match "$release_tag"
+}
+
+pids=()
+started=()
+for name in "${names[@]}"; do
+    [ -z "${failed[$name]:-}" ] || continue
+    (release_one "$name") > "$logs/$name.tag" 2>&1 &
+    pids+=("$!")
+    started+=("$name")
+done
+declare -A tag_of=()
+for i in "${!pids[@]}"; do
+    name=${started[$i]}
+    if wait "${pids[$i]}"; then
+        tag_of[$name]=$(tail -n 1 "$logs/$name.tag")
+    else
+        failed[$name]="the release failed: $(tail -n 1 "$logs/$name.tag")"
+    fi
+done
+
+settle_one() {
+    local sha waited=0 pending
+    sha=$(git -C "${dir_of[$1]}" rev-parse HEAD)
+    while [ "$waited" -lt "$ci_limit" ]; do
+        pending=$(cd "${dir_of[$1]}" && gh run list --commit "$sha" --json status -q '[.[] | select(.status != "completed")] | length' || echo 1)
+        [ "$pending" != 0 ] || break
+        sleep "$ci_poll"
+        waited=$((waited + ci_poll))
+    done
+    (cd "${dir_of[$1]}" && gh run list --commit "$sha" --json workflowName,status,conclusion \
+        -q '(if all(.[]; .status == "completed" and (.conclusion | IN("success", "skipped", "neutral"))) then "green" else "red" end)
+            + "|" + (map("\(.workflowName)=\(if .status == "completed" then .conclusion else .status end)") | sort | join(", "))')
+}
+
+pids=()
+started=()
+for name in "${names[@]}"; do
+    [ -n "${tag_of[$name]:-}" ] || continue
+    (settle_one "$name") > "$logs/$name.settle" 2>&1 &
+    pids+=("$!")
+    started+=("$name")
+done
+for i in "${!pids[@]}"; do
+    wait "${pids[$i]}" || true
+done
+
+red=0
+for tier in "${tiers[@]}"; do
+    for name in $tier; do
+        if [ -n "${failed[$name]:-}" ]; then
+            say "$name: NOT released: ${failed[$name]}"
+            red=1
+            continue
+        fi
+        settled=$(tail -n 1 "$logs/$name.settle")
+        say "$name: ${tag_of[$name]} at $(git -C "${dir_of[$name]}" rev-parse --short HEAD): ${settled#*|}"
+        if [ "${settled%%|*}" != green ]; then red=1; fi
+    done
+done
+exit "$red"
