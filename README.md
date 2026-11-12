@@ -164,9 +164,22 @@ On `PATH`, it also runs in containers that have the dev shell's store paths but 
 
 ## Bumping the lys modules
 
-`bump-lys` moves every `stubbedev/lys-*` module in `go.mod` to the head of its
-default branch, then the `lys-*` inputs of `flake.nix`, then runs `just vendor-hash`
-when `go.sum` changed. It commits nothing and needs no CI to have run upstream.
+`bump-lys` moves the `lys-*` inputs of `flake.nix` to their heads, then every
+`stubbedev/lys-*` module in `go.mod` to the head of its default branch, then runs
+`just vendor-hash` when `go.sum` changed. It commits nothing and needs no CI to
+have run upstream.
+
+Each `lys-*` input must be a `github:` reference tracking a branch: the default
+branch, or the one its `ref` names. `git ls-remote` resolves that branch's head,
+since a rate-limited GitHub API makes `nix flake update` lock a cached, stale
+revision without failing. The heads are locked in one `nix flake update` with an
+`--override-input` per input, and the lock keeps tracking the branch. `bump-lys`
+fails, naming the input, when an input's head cannot be resolved or the lock holds
+any other revision. Inputs that `follows` another are left alone.
+
+With a `flake.nix`, `go get` and `go mod tidy` run in its dev shell, after the
+inputs moved, so the Go toolchain is the one the new lock provides and not an
+older one on the host.
 
 ```just
 bump-lys:

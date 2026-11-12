@@ -6,18 +6,81 @@ die() {
     exit 1
 }
 
+# shellcheck disable=SC2016
+lys_inputs_expr='inputs: let
+  tracked = n: builtins.match "lys-.*" n != null && !(inputs.${n} ? follows);
+  spec = n: let i = inputs.${n}; in if i ? url then builtins.parseFlakeRef i.url else i;
+  line = n: let s = spec n; in
+    if (s.type or "") != "github" then throw "bump-lys: flake input ${n} is not a github: reference"
+    else if s ? rev then throw "bump-lys: flake input ${n} pins rev ${s.rev}, so it has no head to move to"
+    else "${n}\t${s.owner}\t${s.repo}\t${s.ref or "HEAD"}\n";
+in builtins.concatStringsSep "" (map line (builtins.filter tracked (builtins.attrNames inputs)))'
+
+# shellcheck disable=SC2016
+locked_revs_expr='let
+  lock = builtins.fromJSON (builtins.readFile ./flake.lock);
+  roots = lock.nodes.${lock.root}.inputs;
+  locked = n: builtins.isString roots.${n} && lock.nodes.${roots.${n}} ? locked.rev;
+  line = n: "${n}\t${lock.nodes.${roots.${n}}.locked.rev}\n";
+in builtins.concatStringsSep "" (map line (builtins.filter locked (builtins.attrNames roots)))'
+
+resolve_head() {
+    local input=$1 owner=$2 repo=$3 ref=$4 pattern out oid name
+    pattern=HEAD
+    if [ "$ref" != HEAD ]; then
+        pattern=refs/heads/$ref
+    fi
+    out=$(git ls-remote --exit-code "https://github.com/$owner/$repo" "$pattern") ||
+        die "flake input $input: git ls-remote found no $pattern in github.com/$owner/$repo"
+    read -r oid name <<< "$out"
+    if [ "$out" != "$oid"$'\t'"$name" ] || [ "$name" != "$pattern" ]; then
+        die "flake input $input: git ls-remote of $pattern in github.com/$owner/$repo did not return exactly that ref: $out"
+    fi
+    [[ "$oid" =~ ^[0-9a-f]{40}$ ]] ||
+        die "flake input $input: git ls-remote returned no commit id for $pattern in github.com/$owner/$repo: $out"
+    printf '%s\n' "$oid"
+}
+
+bump_flake_inputs() {
+    local listing input owner repo ref oid rev
+    local -a names=() overrides=()
+    local -A heads=() locked=()
+    listing=$(nix eval --raw --file flake.nix inputs --apply "$lys_inputs_expr") ||
+        die "could not read the lys-* inputs of $PWD/flake.nix"
+    [ -n "$listing" ] || return 0
+    while IFS=$'\t' read -r input owner repo ref; do
+        oid=$(resolve_head "$input" "$owner" "$repo" "$ref")
+        heads[$input]=$oid
+        names+=("$input")
+        overrides+=(--override-input "$input" "github:$owner/$repo/$oid")
+    done <<< "$listing"
+    nix flake update "${names[@]}" "${overrides[@]}"
+    listing=$(nix eval --raw --impure --expr "$locked_revs_expr") ||
+        die "could not read the locked revisions of $PWD/flake.lock"
+    if [ -n "$listing" ]; then
+        while IFS=$'\t' read -r input rev; do
+            locked[$input]=$rev
+        done <<< "$listing"
+    fi
+    for input in "${names[@]}"; do
+        [ "${locked[$input]-}" = "${heads[$input]}" ] ||
+            die "flake input $input is locked at ${locked[$input]-nothing}, not at its head ${heads[$input]}"
+    done
+}
+
 [ -f go.mod ] || die "no go.mod in $PWD"
 self=$(sed -n 's/^module //p' go.mod)
-mapfile -t modules < <(grep -oE 'github\.com/stubbedev/lys-[a-z]+' go.mod | sort -u | grep -vxF "$self" || true)
-if [ "${#modules[@]}" -gt 0 ]; then
-    GOPROXY=direct GOPRIVATE='github.com/stubbedev/*' go get "${modules[@]/%/@HEAD}"
-    GOPROXY=direct GOPRIVATE='github.com/stubbedev/*' go mod tidy
-fi
+[ -n "$self" ] || die "no module line in $PWD/go.mod"
+mapfile -t modules < <(grep -oE 'github\.com/stubbedev/lys-[a-z]+' go.mod | sort -u | grep -vxF "$self")
+
+go_run=(env GOPROXY=direct 'GOPRIVATE=github.com/stubbedev/*')
 if [ -f flake.nix ]; then
-    mapfile -t inputs < <(grep -oE '^\s*lys-[a-z]+(\.url)? *=' flake.nix | grep -oE 'lys-[a-z]+' | sort -u)
-    if [ "${#inputs[@]}" -gt 0 ]; then
-        nix flake update "${inputs[@]}"
-    fi
+    bump_flake_inputs
+    go_run=(nix develop --no-update-lock-file --command "${go_run[@]}")
+fi
+if [ "${#modules[@]}" -gt 0 ]; then
+    "${go_run[@]}" go get "${modules[@]/%/@HEAD}"
+    "${go_run[@]}" go mod tidy
 fi
 recipes=" $(just --summary) "
 if [ -n "$(git status --porcelain -- go.sum)" ] && [[ "$recipes" == *" vendor-hash "* ]]; then
