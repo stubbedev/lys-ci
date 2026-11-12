@@ -35,4 +35,4 @@ jobs:
           nix run .#release 2>&1 | grep -qF "usage: release"
           nix run .#train -- --help | grep -qF "usage: train"
       - name: Lint the scripts and the workflows
-        run: nix shell nixpkgs#shellcheck nixpkgs#actionlint nixpkgs#zizmor -c sh -c 'shellcheck vendor-hash bin/no-fused bin/release bin/train tests/vendor-hash.sh tests/no-fused.sh tests/release.sh tests/train.sh && actionlint && zizmor --offline .'
+        run: nix shell nixpkgs#shellcheck nixpkgs#actionlint nixpkgs#zizmor -c sh -c 'shellcheck vendor-hash bin/bump-lys bin/no-fused bin/release bin/train tests/bump-lys.sh tests/vendor-hash.sh tests/no-fused.sh tests/release.sh tests/train.sh && actionlint && zizmor --offline .'
