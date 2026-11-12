@@ -54,7 +54,16 @@ case "$*" in
         calls=$(grep -c "^$name run list --workflow" "$STATE/gh.log")
         sed -n "${calls}p" <<< "$states" | grep . || tail -n 1 <<< "$states"
         ;;
-    "run list --commit"*) jq -r "${*: -1}" <<< '[{"workflowName":"ci","status":"completed","conclusion":"cancelled","createdAt":"2026-01-01T00:00:00Z"},{"workflowName":"ci","status":"completed","conclusion":"success","createdAt":"2026-01-01T00:01:00Z"},{"workflowName":"release","status":"completed","conclusion":"success","createdAt":"2026-01-01T00:00:30Z"}]' ;;
+    "run list --commit"*)
+        runs='[{"workflowName":"ci","status":"completed","conclusion":"cancelled","createdAt":"2026-01-01T00:00:00Z"},{"workflowName":"ci","status":"completed","conclusion":"success","createdAt":"2026-01-01T00:01:00Z"}'
+        polls=$(grep -c "^$name run list --commit" "$STATE/gh.log")
+        if [ ! -f "$STATE/late-release-$name" ] || [ "$polls" -gt 3 ]; then
+            runs+=',{"workflowName":"release","status":"completed","conclusion":"success","createdAt":"2026-01-01T00:00:30Z"}'
+        elif [ "$polls" -gt 1 ]; then
+            runs+=',{"workflowName":"release","status":"queued","conclusion":"","createdAt":"2026-01-01T00:00:30Z"}'
+        fi
+        jq -r "${*: -1}" <<< "$runs]"
+        ;;
 esac
 STUB
 chmod +x "$work/tool/"* "$work/bin/"*
@@ -130,3 +139,11 @@ touch "$STATE/stuck-lys-a"
 "$tool" "$work/lys-a" > "$work/out" 2>&1 || fail "a run that never started was not dispatched again: $(cat "$work/out")"
 [ "$(grep -c "workflow run ci.yml" "$STATE/gh.log")" = 1 ] || fail "dispatched $(grep -c "workflow run ci.yml" "$STATE/gh.log") times"
 grep -qF "lys-a: unchanged, head" "$work/out" || fail "an unchanged repository was not called so: $(cat "$work/out")"
+
+rm -f "$STATE/stuck-lys-a"
+git -C "$work/lys-a" commit --quiet --allow-empty -m five
+git -C "$work/lys-a" push --quiet origin HEAD:main
+: > "$STATE/gh.log"
+touch "$STATE/late-release-lys-a"
+"$tool" "$work/lys-a" > "$work/out" 2>&1 || fail "a release run that appeared late: $(cat "$work/out")"
+grep -qF "ci=success, release=success" "$work/out" || fail "the late release run was not waited for: $(cat "$work/out")"

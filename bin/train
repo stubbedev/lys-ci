@@ -247,12 +247,13 @@ for i in "${!pids[@]}"; do
 done
 
 settle_one() {
-    local sha waited=0 pending latest='group_by(.workflowName) | map(max_by(.createdAt))'
+    local sha waited=0 pending settled=0 latest='group_by(.workflowName) | map(max_by(.createdAt))'
     sha=$(git -C "${dir_of[$1]}" rev-parse HEAD)
     while [ "$waited" -lt "$ci_limit" ]; do
         pending=$(cd "${dir_of[$1]}" && gh run list --commit "$sha" --json workflowName,status,createdAt \
             -q "$latest | if length == 0 then -1 else map(select(.status != \"completed\")) | length end" || echo 1)
-        if [ "$pending" = 0 ] || { [ "$pending" = -1 ] && [ "$waited" -ge "$ci_stall" ]; }; then break; fi
+        if [ "$pending" = 0 ]; then settled=$((settled + 1)); else settled=0; fi
+        if [ "$settled" -ge 2 ] || { [ "$pending" = -1 ] && [ "$waited" -ge "$ci_stall" ]; }; then break; fi
         sleep "$ci_poll"
         waited=$((waited + ci_poll))
     done
