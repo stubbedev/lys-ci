@@ -6,6 +6,13 @@ die() {
     exit 1
 }
 say() { printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*"; }
+in_dev_shell() {
+    if [ -f flake.nix ]; then
+        nix develop --no-update-lock-file --command "$@"
+    else
+        "$@"
+    fi
+}
 
 case "${1:-}" in
     -h | --help)
@@ -105,12 +112,8 @@ bump_one() {
         echo "unchanged"
         return 0
     fi
-    local go_run=(env GOWORK=off)
-    if [ -f flake.nix ]; then
-        go_run=(nix develop --no-update-lock-file --command "${go_run[@]}")
-    fi
-    "${go_run[@]}" go build ./...
-    "${go_run[@]}" go vet ./...
+    in_dev_shell env GOWORK=off go build ./...
+    in_dev_shell env GOWORK=off go vet ./...
     deps=$(git diff go.mod | grep -E '^\+' | grep -oE 'github\.com/stubbedev/lys-[a-z]+ v[^ ]+' | sed 's#github.com/stubbedev/##' | paste -sd, | sed 's/,/, /g' || true)
     git add -A
     git commit --quiet -m "deps: ${deps:-the lys flake inputs at their heads}"
@@ -223,7 +226,7 @@ release_one() {
     if git -C "$d" describe --tags --exact-match --match "$release_tag" HEAD 2> /dev/null; then
         return 0
     fi
-    (cd "$d" && just release-patch) > "$logs/$1.release" 2>&1 || {
+    (cd "$d" && in_dev_shell just release-patch) > "$logs/$1.release" 2>&1 || {
         tail -n 2 "$logs/$1.release" | tr '\n' ' '
         return 1
     }

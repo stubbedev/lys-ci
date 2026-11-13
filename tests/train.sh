@@ -44,6 +44,7 @@ cat > "$work/bin/just" << 'STUB'
 #!/usr/bin/env bash
 set -euo pipefail
 [ "$1" = release-patch ]
+echo "$(basename "$PWD") just $1 ${IN_NIX_DEVELOP:-host}" >> "$STATE/just.log"
 tag=v0.0.$(($(git tag -l 'v*' | wc -l) + 1))
 git tag -a "$tag" -m "$tag"
 git push --quiet origin "$tag"
@@ -132,6 +133,8 @@ grep -qF "lys-b run rerun 9 --failed" "$STATE/gh.log" || fail "the flake was not
 grep -qF "lys-a: v0.0.2 at" "$work/out" || fail "lys-a's new commit was not released: $(cat "$work/out")"
 grep -qF "lys-b: v0.0.2 at" "$work/out" || fail "lys-b's bump was not released: $(cat "$work/out")"
 grep -qF "lys-c: v0.0.1 at" "$work/out" || fail "lys-c was not released: $(cat "$work/out")"
+grep -qxF "lys-c just release-patch devshell" "$STATE/just.log" || fail "a flake's release did not run in its dev shell, whose Go its release recipe may need: $(cat "$STATE/just.log")"
+grep -qxF "lys-a just release-patch host" "$STATE/just.log" || fail "a repository without a flake did not release with the tools on PATH: $(cat "$STATE/just.log")"
 grep -qF "ci=success, release=success" "$work/out" || fail "the workflows were not reported: $(cat "$work/out")"
 
 git -C "$work/lys-a" commit --quiet --allow-empty -m three
