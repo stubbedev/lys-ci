@@ -105,8 +105,12 @@ bump_one() {
         echo "unchanged"
         return 0
     fi
-    GOWORK=off go build ./...
-    GOWORK=off go vet ./...
+    local go_run=(env GOWORK=off)
+    if [ -f flake.nix ]; then
+        go_run=(nix develop --no-update-lock-file --command "${go_run[@]}")
+    fi
+    "${go_run[@]}" go build ./...
+    "${go_run[@]}" go vet ./...
     deps=$(git diff go.mod | grep -E '^\+' | grep -oE 'github\.com/stubbedev/lys-[a-z]+ v[^ ]+' | sed 's#github.com/stubbedev/##' | paste -sd, | sed 's/,/, /g' || true)
     git add -A
     git commit --quiet -m "deps: ${deps:-the lys flake inputs at their heads}"

@@ -29,7 +29,16 @@ fi
 STUB
 cat > "$work/bin/go" << 'STUB'
 #!/usr/bin/env bash
-exit 0
+set -euo pipefail
+echo "$(basename "$PWD") go $1 ${IN_NIX_DEVELOP:-host}" >> "$STATE/go.log"
+STUB
+cat > "$work/bin/nix" << 'STUB'
+#!/usr/bin/env bash
+set -euo pipefail
+[ "$1" = develop ] || exit 1
+while [ "$1" != --command ]; do shift; done
+shift
+IN_NIX_DEVELOP=devshell exec "$@"
 STUB
 cat > "$work/bin/just" << 'STUB'
 #!/usr/bin/env bash
@@ -79,6 +88,7 @@ repo() {
     printf 'module github.com/stubbedev/%s\n' "$name" > go.mod
     if [ -n "$requires" ]; then printf 'require github.com/stubbedev/%s v0.0.0\n' "$requires" >> go.mod; fi
     printf '{"nodes":{"root":{"inputs":{"nixpkgs":"nixpkgs"%s}}}}\n' "${input:+,\"$input\":\"$input\"}" > flake.lock
+    if [ -n "$input" ]; then echo '{}' > flake.nix; fi
     git add -A
     git commit --quiet -m one
     git push --quiet origin HEAD:main
@@ -103,6 +113,9 @@ if out=$("$tool" "$work/lys-a" "$work/lys-b" "$work/lys-c" 2>&1); then fail "red
 [ "$(paste -sd' ' "$STATE/bump-order")" = "lys-a lys-b lys-c" ] || fail "bumped out of order: $(cat "$STATE/bump-order")"
 [ "$(git -C "$work/lys-c" show origin/main:pinned)" = "$(git -C "$work/lys-b" rev-parse origin/main)" ] || fail "lys-c did not pin lys-b's bumped head"
 [[ $(git -C "$work/lys-b" log -1 --format=%s origin/main) == "deps: lys-a v0.0.0-"* ]] || fail "the deps commit message: $(git -C "$work/lys-b" log -1 --format=%s)"
+grep -qxF "lys-c go build devshell" "$STATE/go.log" || fail "a flake's build did not run in its dev shell, whose Go its go.mod may need: $(cat "$STATE/go.log")"
+grep -qxF "lys-c go vet devshell" "$STATE/go.log" || fail "a flake's vet did not run in its dev shell: $(cat "$STATE/go.log")"
+grep -qxF "lys-b go build host" "$STATE/go.log" || fail "a repository without a flake did not build with the Go on PATH: $(cat "$STATE/go.log")"
 grep -qF "lys-c run rerun 7 --failed" "$STATE/gh.log" || fail "the failed jobs were not rerun"
 [[ $out == *"lys-c: NOT released: ci.yml on"* ]] || fail "lys-c was not reported: $out"
 git -C "$work/lys-c" ls-remote --exit-code origin refs/tags/v0.0.1 > /dev/null && fail "red lys-c was tagged"
