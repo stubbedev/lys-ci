@@ -116,7 +116,7 @@ publish:
 
 `.github/actions/nix-setup`:
 
-- installs Nix with flakes and the `nix.stubbe.dev` substituter;
+- installs Nix with flakes and the `xilos.dev` substituter;
 - restores the Nix store, keyed by OS, architecture, job and `flake.lock`;
 - restores Go's build and module caches, refreshed daily and on a change to
   `flake.lock` or `go.sum`, so `go test` reruns only what a commit can affect;
