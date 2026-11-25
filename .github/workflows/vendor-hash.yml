@@ -2,6 +2,11 @@ name: vendor-hash
 
 on:
   workflow_call:
+    inputs:
+      recipe:
+        description: The just recipe that rewrites the Nix files holding vendorHash
+        type: string
+        default: vendor-hash
     secrets:
       VENDOR_HASH_DEPLOY_KEY:
         required: false
@@ -26,12 +31,15 @@ jobs:
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
       - name: Recompute vendorHash
-        run: nix develop -c just vendor-hash
+        env:
+          RECIPE: ${{ inputs.recipe }}
+        run: nix develop -c just "$RECIPE"
       - name: Push the new vendorHash to the pull request
         env:
           DEPLOY_KEY: ${{ secrets.VENDOR_HASH_DEPLOY_KEY }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          RECIPE: ${{ inputs.recipe }}
           REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
@@ -40,12 +48,14 @@ jobs:
             echo "vendorHash is current"
             exit 0
           fi
-          if [[ ${#changed[@]} != 1 ]]; then
-            echo "::error::just vendor-hash must change one file, but it changed: ${changed[*]}"
-            exit 1
-          fi
+          for path in "${changed[@]}"; do
+            if [[ "$path" != *.nix ]]; then
+              echo "::error::just $RECIPE must change only Nix files, but it changed: ${changed[*]}"
+              exit 1
+            fi
+          done
           if [[ -z "$DEPLOY_KEY" ]]; then
-            echo "::error::${changed[0]} has a stale vendorHash and $REPOSITORY has no VENDOR_HASH_DEPLOY_KEY Dependabot secret. Add a write deploy key; see https://github.com/stubbedev/lys-ci#a-repositorys-deploy-key"
+            echo "::error::${changed[*]} has a stale vendorHash and $REPOSITORY has no VENDOR_HASH_DEPLOY_KEY Dependabot secret. Add a write deploy key; see https://github.com/stubbedev/lys-ci#a-repositorys-deploy-key"
             exit 1
           fi
           ssh_dir=$(mktemp -d)
@@ -55,7 +65,7 @@ jobs:
           printf 'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl\n' > "$ssh_dir/known_hosts"
           git -c user.name='github-actions[bot]' \
             -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
-            commit -q -F - -- "${changed[0]}" <<EOF
+            commit -q -F - -- "${changed[@]}" <<EOF
           nix: vendorHash for the bumped modules (#$PR_NUMBER)
 
           Dependabot rewrites go.mod and go.sum but not the Nix vendorHash,
