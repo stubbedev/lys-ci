@@ -8,13 +8,14 @@ Pin the reusable workflow and the action to a commit of this repository.
 ## vendorHash on Dependabot's Go pull requests
 
 Dependabot updates `go.mod` and `go.sum` but not `vendorHash`, so every Nix build
-of its pull request fails. The `vendor-hash` workflow runs `just vendor-hash` and
-pushes the result to the pull request.
+of its pull request fails. The `vendor-hash` workflow runs a just recipe in the
+dev shell, `vendor-hash` unless the `recipe` input names another, and pushes the
+result to the pull request.
 
 It runs only on Dependabot pull requests from the same repository. A current hash
-needs no commit. The job fails when the build fails for another reason, when
-`just vendor-hash` changes other than exactly one file, or when the hash is stale
-and `VENDOR_HASH_DEPLOY_KEY` is missing.
+needs no commit. The job fails when the build fails for another reason, when the
+recipe changes a file that is not a Nix file, or when the hash is stale and
+`VENDOR_HASH_DEPLOY_KEY` is missing.
 
 ### Setup
 
@@ -48,6 +49,10 @@ jobs:
     secrets:
       VENDOR_HASH_DEPLOY_KEY: ${{ secrets.VENDOR_HASH_DEPLOY_KEY }}
 ```
+
+| Input | Default | Purpose |
+| --- | --- | --- |
+| `recipe` | `vendor-hash` | The just recipe that rewrites the Nix files holding `vendorHash` |
 
 | Secret | Required | Purpose |
 | --- | --- | --- |
