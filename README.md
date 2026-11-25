@@ -5,6 +5,70 @@ The CI tools every lys repository shares. Documentation sites use
 
 Pin the reusable workflow and the action to a commit of this repository.
 
+## Regenerated files on Dependabot pull requests
+
+Dependabot updates the manifests and lock files but not the files generated from
+them, such as a Nix `vendorHash` or a third-party licence list. The `regenerate`
+workflow runs a just recipe in the dev shell and pushes what it changed to the
+pull request.
+
+It runs only on Dependabot pull requests from the same repository. A recipe that
+changes nothing needs no commit. The job fails when the recipe fails, when it
+changes a file that matches none of the `paths` patterns, or when it changes a
+file and `REGENERATE_DEPLOY_KEY` is missing.
+
+`.github/workflows/licenses.yml`:
+
+```yaml
+name: licenses
+
+on:
+  pull_request:
+    paths:
+      - "**/Cargo.toml"
+      - Cargo.lock
+
+permissions:
+  contents: read
+
+jobs:
+  licenses:
+    uses: stubbedev/lys-ci/.github/workflows/regenerate.yml@<commit>
+    with:
+      recipe: licenses
+      paths: THIRD-PARTY-LICENSES.md
+      message: |
+        licenses: THIRD-PARTY-LICENSES.md for the bumped crates (#${{ github.event.pull_request.number }})
+    secrets:
+      REGENERATE_DEPLOY_KEY: ${{ secrets.REGENERATE_DEPLOY_KEY }}
+```
+
+| Input | Purpose |
+| --- | --- |
+| `recipe` | The just recipe that regenerates the files |
+| `paths` | Bash glob patterns, one per line, that every file the recipe changes must match; `*` also matches `/` |
+| `message` | The message of the commit holding the regenerated files |
+
+| Secret | Required | Purpose |
+| --- | --- | --- |
+| `REGENERATE_DEPLOY_KEY` | Only when the recipe changes a file | Private key of a write deploy key; the push uses it so the new head gets a CI run |
+
+### A repository's deploy key
+
+Store the key as a Dependabot secret, so only Dependabot's runs can read it:
+
+```sh
+repo=stubbedev/<repository>
+dir=$(mktemp -d)
+ssh-keygen -q -t ed25519 -N '' -C 'regenerate workflow' -f "$dir/key"
+gh repo deploy-key add "$dir/key.pub" -R "$repo" --allow-write --title 'regenerate workflow'
+gh secret set REGENERATE_DEPLOY_KEY --app dependabot -R "$repo" < "$dir/key"
+rm -rf "$dir"
+```
+
+The run that the key's push starts has no Dependabot actor and cannot read the
+secret; the recipe changes nothing there and the job succeeds.
+
 ## vendorHash on Dependabot's Go pull requests
 
 Dependabot updates `go.mod` and `go.sum` but not `vendorHash`, so every Nix build
@@ -56,23 +120,7 @@ jobs:
 
 | Secret | Required | Purpose |
 | --- | --- | --- |
-| `VENDOR_HASH_DEPLOY_KEY` | Only when a hash is stale | Private key of a write deploy key; the push uses it so the new head gets a CI run |
-
-### A repository's deploy key
-
-Store the key as a Dependabot secret, so only Dependabot's runs can read it:
-
-```sh
-repo=stubbedev/<repository>
-dir=$(mktemp -d)
-ssh-keygen -q -t ed25519 -N '' -C 'vendor-hash workflow' -f "$dir/key"
-gh repo deploy-key add "$dir/key.pub" -R "$repo" --allow-write --title 'vendor-hash workflow'
-gh secret set VENDOR_HASH_DEPLOY_KEY --app dependabot -R "$repo" < "$dir/key"
-rm -rf "$dir"
-```
-
-The run that the key's push starts has no Dependabot actor and cannot read the
-secret; it finds the hash current and succeeds.
+| `VENDOR_HASH_DEPLOY_KEY` | Only when a hash is stale | Private key of a write deploy key, set up as in [a repository's deploy key](#a-repositorys-deploy-key) under this secret name |
 
 ## Security scanning
 

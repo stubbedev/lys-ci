@@ -1,0 +1,93 @@
+name: regenerate
+
+on:
+  workflow_call:
+    inputs:
+      recipe:
+        description: The just recipe that regenerates the files
+        type: string
+        required: true
+      paths:
+        description: Bash glob patterns, one per line, that every file the recipe changes must match
+        type: string
+        required: true
+      message:
+        description: The message of the commit holding the regenerated files
+        type: string
+        required: true
+    secrets:
+      REGENERATE_DEPLOY_KEY:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  regenerate:
+    if: github.event.pull_request.user.login == 'dependabot[bot]' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      group: regenerate-${{ github.repository }}-${{ github.event.pull_request.number }}-${{ inputs.recipe }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: cachix/install-nix-action@75c75c31ebece974e48ebc36b4ad125bd97bd97b # 31.11.3
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Regenerate
+        env:
+          RECIPE: ${{ inputs.recipe }}
+        run: nix develop -c just "$RECIPE"
+      - name: Push the regenerated files to the pull request
+        env:
+          ALLOWED: ${{ inputs.paths }}
+          DEPLOY_KEY: ${{ secrets.REGENERATE_DEPLOY_KEY }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          MESSAGE: ${{ inputs.message }}
+          RECIPE: ${{ inputs.recipe }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          mapfile -t patterns < <(grep -v '^[[:space:]]*$' <<< "$ALLOWED")
+          if [[ ${#patterns[@]} == 0 ]]; then
+            echo "::error::The paths input names no pattern"
+            exit 1
+          fi
+          mapfile -t changed < <(git status --porcelain --untracked-files=all | cut -c4-)
+          if [[ ${#changed[@]} == 0 ]]; then
+            echo "just $RECIPE changed nothing"
+            exit 0
+          fi
+          for path in "${changed[@]}"; do
+            allowed=false
+            for pattern in "${patterns[@]}"; do
+              # shellcheck disable=SC2053
+              if [[ "$path" == $pattern ]]; then
+                allowed=true
+                break
+              fi
+            done
+            if [[ "$allowed" == false ]]; then
+              echo "::error::just $RECIPE may change only paths matching ${patterns[*]}, but it changed: ${changed[*]}"
+              exit 1
+            fi
+          done
+          if [[ -z "$DEPLOY_KEY" ]]; then
+            echo "::error::just $RECIPE changed ${changed[*]} and $REPOSITORY has no REGENERATE_DEPLOY_KEY Dependabot secret. Add a write deploy key; see https://github.com/stubbedev/lys-ci#a-repositorys-deploy-key"
+            exit 1
+          fi
+          ssh_dir=$(mktemp -d)
+          trap 'rm -rf "$ssh_dir"' EXIT
+          printf '%s\n' "$DEPLOY_KEY" > "$ssh_dir/key"
+          chmod 600 "$ssh_dir/key"
+          printf 'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl\n' > "$ssh_dir/known_hosts"
+          git add -- "${changed[@]}"
+          printf '%s\n' "$MESSAGE" | git -c user.name='github-actions[bot]' \
+            -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            commit -q -F - -- "${changed[@]}"
+          GIT_SSH_COMMAND="ssh -i $ssh_dir/key -o IdentitiesOnly=yes -o UserKnownHostsFile=$ssh_dir/known_hosts" \
+            git push "git@github.com:$REPOSITORY.git" "HEAD:refs/heads/$HEAD_REF"
