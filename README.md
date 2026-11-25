@@ -72,14 +72,15 @@ secret; the recipe changes nothing there and the job succeeds.
 ## vendorHash on Dependabot's Go pull requests
 
 Dependabot updates `go.mod` and `go.sum` but not `vendorHash`, so every Nix build
-of its pull request fails. The `vendor-hash` workflow runs a just recipe in the
-dev shell, `vendor-hash` unless the `recipe` input names another, and pushes the
+of its pull request fails. The `vendor-hash` workflow is the `regenerate` workflow
+with the `paths` pattern `*.nix` and a vendorHash commit message. It runs a just
+recipe, `vendor-hash` unless the `recipe` input names another, and pushes the
 result to the pull request.
 
-It runs only on Dependabot pull requests from the same repository. A current hash
-needs no commit. The job fails when the build fails for another reason, when the
-recipe changes a file that is not a Nix file, or when the hash is stale and
-`VENDOR_HASH_DEPLOY_KEY` is missing.
+It fails when the build fails for another reason, when the recipe changes a file
+that is not a Nix file, or when the hash is stale and `VENDOR_HASH_DEPLOY_KEY` is
+missing; the error then names `REGENERATE_DEPLOY_KEY`, the secret it is passed on
+as.
 
 ### Setup
 
